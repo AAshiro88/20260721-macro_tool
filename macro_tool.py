@@ -477,6 +477,10 @@ class MacroApp:
         self._capture_modifiers = set()
         self._hook_id = None
 
+        # 追蹤目前被按住的鍵盤按鍵與滑鼠按鈕, 用於停止時全部釋放
+        self._held_keys = set()
+        self._held_mouse_buttons = set()
+
         self.mouse = MouseController()
 
         self.load_data()
@@ -873,8 +877,18 @@ class MacroApp:
         thread.start()
         self.root.after(0, lambda: self.update_status_label(name))
 
+    def _release_all(self):
+        for key in list(self._held_keys):
+            keyboard.release(key)
+        self._held_keys.clear()
+        for btn_name in list(self._held_mouse_buttons):
+            if btn_name in MOUSE_BUTTON_MAP:
+                self.mouse.release(MOUSE_BUTTON_MAP[btn_name])
+        self._held_mouse_buttons.clear()
+
     def stop_macro(self, name):
         self.running_flags[name] = False
+        self._release_all()
         self.root.after(0, lambda: self.update_status_label(name))
 
     def run_loop(self, name):
@@ -894,9 +908,11 @@ class MacroApp:
 
         if step_type == "key_down":
             keyboard.press(step["key"])
+            self._held_keys.add(step["key"])
 
         elif step_type == "key_up":
             keyboard.release(step["key"])
+            self._held_keys.discard(step["key"])
 
         elif step_type == "key_click":
             keyboard.send(step["key"])
@@ -906,9 +922,11 @@ class MacroApp:
 
         elif step_type == "mouse_down":
             self.mouse.press(MOUSE_BUTTON_MAP[step["button"]])
+            self._held_mouse_buttons.add(step["button"])
 
         elif step_type == "mouse_up":
             self.mouse.release(MOUSE_BUTTON_MAP[step["button"]])
+            self._held_mouse_buttons.discard(step["button"])
 
         elif step_type == "mouse_click":
             self.mouse.click(MOUSE_BUTTON_MAP[step["button"]])
