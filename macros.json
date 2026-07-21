@@ -1,0 +1,55 @@
+{
+  "水液": {
+    "hotkey": "f6",
+    "steps": [
+      {
+        "type": "key_down",
+        "key": "right"
+      },
+      {
+        "type": "wait",
+        "seconds": 2.0
+      },
+      {
+        "type": "key_down",
+        "key": "down"
+      },
+      {
+        "type": "wait",
+        "seconds": 2.0
+      },
+      {
+        "type": "key_click",
+        "key": "v"
+      },
+      {
+        "type": "wait",
+        "seconds": 2.0
+      },
+      {
+        "type": "key_down",
+        "key": "z"
+      },
+      {
+        "type": "key_up",
+        "key": "z"
+      },
+      {
+        "type": "key_down",
+        "key": "x"
+      },
+      {
+        "type": "key_up",
+        "key": "x"
+      },
+      {
+        "type": "key_up",
+        "key": "down"
+      },
+      {
+        "type": "key_up",
+        "key": "right"
+      }
+    ]
+  }
+}
