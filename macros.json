@@ -19,7 +19,15 @@
         "seconds": 2.0
       },
       {
-        "type": "key_click",
+        "type": "key_down",
+        "key": "v"
+      },
+      {
+        "type": "wait",
+        "seconds": 0.1
+      },
+      {
+        "type": "key_up",
         "key": "v"
       },
       {
