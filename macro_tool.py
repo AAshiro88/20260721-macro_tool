@@ -209,7 +209,12 @@ class StepsEditor:
 
         if t in ("key_down", "key_up", "key_click"):
             self.key_var = tk.StringVar()
-            self.add_field("按鍵名稱:", self.key_var, row=0, col=0, width=15)
+            key_entry = self.add_field("按鍵名稱:", self.key_var, row=0, col=0, width=15)
+            ttk.Button(self.fields_frame, text="錄製",
+                       command=lambda: self.app.start_key_capture(self.key_var)).grid(row=0, column=2, padx=5, pady=3)
+            ttk.Label(self.fields_frame, text="手動輸入或按「錄製」按鍵").grid(
+                row=1, column=0, columnspan=4, sticky="w", padx=5
+            )
 
         elif t == "move_mouse":
             self.x_var = tk.StringVar()
@@ -466,6 +471,12 @@ class MacroApp:
         }
         self.record_hotkey_handles = {}
 
+        # 按鍵錄製狀態
+        self._capturing = False
+        self._capture_var = None
+        self._capture_modifiers = set()
+        self._hook_id = None
+
         self.mouse = MouseController()
 
         self.load_data()
@@ -534,9 +545,11 @@ class MacroApp:
         self.hotkey_var = tk.StringVar()
         self.hotkey_entry = ttk.Entry(hotkey_frame, textvariable=self.hotkey_var, width=15)
         self.hotkey_entry.grid(row=0, column=1, padx=5, pady=5)
-        ttk.Label(hotkey_frame, text="例如: f6").grid(row=0, column=2, padx=5, pady=5)
-        ttk.Button(hotkey_frame, text="套用", command=self.apply_hotkey).grid(row=0, column=3, padx=5, pady=5)
-        ttk.Button(hotkey_frame, text="手動開始/停止", command=self.manual_toggle).grid(row=0, column=4, padx=5, pady=5)
+        ttk.Button(hotkey_frame, text="錄製",
+                   command=lambda: self.start_key_capture(self.hotkey_var)).grid(row=0, column=2, padx=3, pady=5)
+        ttk.Label(hotkey_frame, text="手動輸入或按「錄製」, 例如 f6").grid(row=0, column=3, padx=5, pady=5)
+        ttk.Button(hotkey_frame, text="套用", command=self.apply_hotkey).grid(row=0, column=4, padx=5, pady=5)
+        ttk.Button(hotkey_frame, text="手動開始/停止", command=self.manual_toggle).grid(row=0, column=5, padx=5, pady=5)
 
         self.status_label = ttk.Label(hotkey_frame, text="狀態: 尚未選擇巨集", foreground="gray")
         self.status_label.grid(row=1, column=0, columnspan=5, padx=5, pady=(0, 5), sticky="w")
@@ -551,14 +564,26 @@ class MacroApp:
         self.record_rend_var = tk.StringVar(value=self.record_hotkeys["region_end"])
 
         ttk.Label(record_frame, text="抓座標:").grid(row=0, column=0, padx=3, pady=5)
-        ttk.Entry(record_frame, textvariable=self.record_pos_var, width=6).grid(row=0, column=1, padx=3, pady=5)
-        ttk.Label(record_frame, text="抓顏色:").grid(row=0, column=2, padx=3, pady=5)
-        ttk.Entry(record_frame, textvariable=self.record_color_var, width=6).grid(row=0, column=3, padx=3, pady=5)
-        ttk.Label(record_frame, text="區塊起點:").grid(row=0, column=4, padx=3, pady=5)
-        ttk.Entry(record_frame, textvariable=self.record_rstart_var, width=6).grid(row=0, column=5, padx=3, pady=5)
-        ttk.Label(record_frame, text="區塊終點:").grid(row=0, column=6, padx=3, pady=5)
-        ttk.Entry(record_frame, textvariable=self.record_rend_var, width=6).grid(row=0, column=7, padx=3, pady=5)
-        ttk.Button(record_frame, text="套用", command=self.apply_record_hotkeys).grid(row=0, column=8, padx=5, pady=5)
+        e = ttk.Entry(record_frame, textvariable=self.record_pos_var, width=6)
+        e.grid(row=0, column=1, padx=3, pady=5)
+        ttk.Button(record_frame, text="錄製", width=4,
+                   command=lambda: self.start_key_capture(self.record_pos_var)).grid(row=0, column=2, padx=1, pady=5)
+        ttk.Label(record_frame, text="抓顏色:").grid(row=0, column=3, padx=3, pady=5)
+        e = ttk.Entry(record_frame, textvariable=self.record_color_var, width=6)
+        e.grid(row=0, column=4, padx=3, pady=5)
+        ttk.Button(record_frame, text="錄製", width=4,
+                   command=lambda: self.start_key_capture(self.record_color_var)).grid(row=0, column=5, padx=1, pady=5)
+        ttk.Label(record_frame, text="區塊起點:").grid(row=0, column=6, padx=3, pady=5)
+        e = ttk.Entry(record_frame, textvariable=self.record_rstart_var, width=6)
+        e.grid(row=0, column=7, padx=3, pady=5)
+        ttk.Button(record_frame, text="錄製", width=4,
+                   command=lambda: self.start_key_capture(self.record_rstart_var)).grid(row=0, column=8, padx=1, pady=5)
+        ttk.Label(record_frame, text="區塊終點:").grid(row=0, column=9, padx=3, pady=5)
+        e = ttk.Entry(record_frame, textvariable=self.record_rend_var, width=6)
+        e.grid(row=0, column=10, padx=3, pady=5)
+        ttk.Button(record_frame, text="錄製", width=4,
+                   command=lambda: self.start_key_capture(self.record_rend_var)).grid(row=0, column=11, padx=1, pady=5)
+        ttk.Button(record_frame, text="套用", command=self.apply_record_hotkeys).grid(row=0, column=12, padx=5, pady=5)
 
         # 步驟編輯器 (頂層步驟)
         self.steps_editor = StepsEditor(right_frame, self, [], TOP_LEVEL_TYPES)
@@ -708,6 +733,52 @@ class MacroApp:
             except Exception:
                 pass
         self.record_hotkey_handles = {}
+
+    # ---------------------- 按鍵錄製功能 ----------------------
+
+    _MODIFIER_KEYS = {'ctrl', 'ctrl_l', 'ctrl_r', 'alt', 'alt_l', 'alt_r',
+                       'shift', 'shift_l', 'shift_r', 'windows', 'win_l', 'win_r'}
+
+    def start_key_capture(self, target_var):
+        if self._capturing:
+            return
+        self._capturing = True
+        self._capture_var = target_var
+        self._capture_modifiers = set()
+        target_var.set("請按鍵...")
+        self._hook_id = keyboard.hook(self._on_capture_event)
+
+    def _on_capture_event(self, event):
+        if event.event_type != "down":
+            return
+        name = event.name.lower()
+        if name in self._MODIFIER_KEYS:
+            self._capture_modifiers.add(name)
+            return
+        # Escape 無修飾鍵 → 取消
+        if name == 'esc' and not self._capture_modifiers:
+            self.root.after(0, lambda: self._finish_capture(cancelled=True))
+            return
+        parts = []
+        if any(m.startswith('ctrl') for m in self._capture_modifiers):
+            parts.append('ctrl')
+        if any(m.startswith('alt') for m in self._capture_modifiers):
+            parts.append('alt')
+        if any(m.startswith('shift') for m in self._capture_modifiers):
+            parts.append('shift')
+        parts.append(name)
+        hotkey_str = '+'.join(parts)
+        self.root.after(0, lambda hk=hotkey_str: self._finish_capture(hk))
+
+    def _finish_capture(self, hotkey_str=None, cancelled=False):
+        if self._hook_id is not None:
+            keyboard.unhook(self._hook_id)
+            self._hook_id = None
+        self._capturing = False
+        if not cancelled and hotkey_str:
+            self._capture_var.set(hotkey_str)
+        self._capture_var = None
+        self._capture_modifiers.clear()
 
     def on_capture_position(self):
         if not self.active_step_editor:
@@ -868,6 +939,9 @@ class MacroApp:
     # ---------------------- 關閉程式 ----------------------
 
     def on_close(self):
+        if self._hook_id is not None:
+            keyboard.unhook(self._hook_id)
+            self._hook_id = None
         for name in list(self.profiles.keys()):
             self.stop_macro(name)
             self.unregister_hotkey(name)
