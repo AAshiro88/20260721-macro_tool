@@ -10,7 +10,7 @@
         },
         {
           "type": "wait",
-          "seconds": 2.0
+          "seconds": 0.1
         },
         {
           "type": "key_down",
