@@ -450,14 +450,23 @@ class MacroApp:
         self.root.title("巨集自動化工具")
         self.root.geometry("900x680")
 
-        # 資料結構: profiles = { 名稱: {"hotkey": 字串, "steps": [step, ...]} }
+        # 資料結構: profiles = { 名稱: {"enabled": 布林值, "steps": [step, ...]} }
+        # enabled 表示此巨集是否受統一快捷鍵控制, 未勾選則只能用手動按鈕開始/停止
         self.profiles = {}
         # 每組巨集目前是否正在執行
         self.running_flags = {}
         # 每組巨集對應的執行緒
         self.threads = {}
-        # 每組巨集註冊的全域快捷鍵代碼, 用於之後移除
-        self.hotkey_handles = {}
+
+        # 統一的巨集開始/停止快捷鍵 (單一字串), 取代原本每組巨集各自的快捷鍵
+        self.global_hotkey = ""
+        # 統一快捷鍵註冊後的代碼, 用於之後移除
+        self.global_hotkey_handle = None
+
+        # 目前在左側清單中被選取的巨集名稱, 取代原本用 Listbox 選取索引取得
+        self.selected_profile_name = None
+        # 巨集清單每個項目的元件參照, 名稱 -> {"row": Frame, "label": Label, "var": BooleanVar}
+        self.profile_row_widgets = {}
 
         # 目前滑鼠所在位置作用中的步驟編輯器, 供記錄快捷鍵填入資料使用
         self.active_step_editor = None
@@ -490,9 +499,8 @@ class MacroApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # 程式啟動時, 依照已儲存的資料重新註冊所有巨集快捷鍵
-        for name in self.profiles:
-            self.register_hotkey(name)
+        # 程式啟動時, 依照已儲存的設定重新註冊統一快捷鍵
+        self.register_global_hotkey()
 
     # ---------------------- 資料存取 ----------------------
 
@@ -500,18 +508,32 @@ class MacroApp:
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, "r", encoding="utf-8") as f:
-                    self.profiles = json.load(f)
+                    data = json.load(f)
             except Exception:
-                self.profiles = {}
+                data = {}
         else:
-            self.profiles = {}
+            data = {}
 
-        for name in self.profiles:
+        if isinstance(data, dict) and "profiles" in data:
+            # 新格式: 包含統一快捷鍵與各巨集設定
+            self.global_hotkey = data.get("global_hotkey", "")
+            self.profiles = data.get("profiles", {})
+        else:
+            # 舊格式相容: 整份資料就是 profiles, 每組巨集原本各自有 hotkey 欄位
+            # 改版後快捷鍵統一控制, 故舊的個別 hotkey 不再使用, 只保留 steps
+            self.global_hotkey = ""
+            self.profiles = data if isinstance(data, dict) else {}
+
+        for name, profile in self.profiles.items():
+            # 確保每組巨集都有 enabled 欄位 (是否受統一快捷鍵控制), 預設為勾選
+            profile.setdefault("enabled", True)
+            profile.setdefault("steps", [])
             self.running_flags[name] = False
 
     def save_data(self):
+        data = {"global_hotkey": self.global_hotkey, "profiles": self.profiles}
         with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.profiles, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
         messagebox.showinfo("儲存完成", "巨集設定已儲存")
 
     # ---------------------- 介面建立 ----------------------
@@ -524,10 +546,26 @@ class MacroApp:
         left_frame = ttk.Frame(main_frame)
         left_frame.pack(side="left", fill="y", padx=(0, 10))
 
-        ttk.Label(left_frame, text="巨集清單").pack(anchor="w")
-        self.profile_listbox = tk.Listbox(left_frame, width=22, height=25, exportselection=False)
-        self.profile_listbox.pack(fill="y", expand=True)
-        self.profile_listbox.bind("<<ListboxSelect>>", self.on_profile_select)
+        ttk.Label(left_frame, text="巨集清單 (打勾表示受統一快捷鍵控制)").pack(anchor="w")
+
+        # 巨集清單改用 Canvas + Frame 實作, 讓每個項目前面可以放置打勾選取格
+        list_container = ttk.Frame(left_frame, width=230, height=500)
+        list_container.pack(fill="y", expand=True)
+        list_container.pack_propagate(False)
+
+        self.profile_list_canvas = tk.Canvas(list_container, width=210, highlightthickness=0)
+        profile_scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.profile_list_canvas.yview)
+        self.profile_list_inner = ttk.Frame(self.profile_list_canvas)
+
+        self.profile_list_inner.bind(
+            "<Configure>",
+            lambda e: self.profile_list_canvas.configure(scrollregion=self.profile_list_canvas.bbox("all")),
+        )
+        self.profile_list_canvas.create_window((0, 0), window=self.profile_list_inner, anchor="nw")
+        self.profile_list_canvas.configure(yscrollcommand=profile_scrollbar.set)
+
+        self.profile_list_canvas.pack(side="left", fill="both", expand=True)
+        profile_scrollbar.pack(side="left", fill="y")
 
         profile_btn_frame = ttk.Frame(left_frame)
         profile_btn_frame.pack(fill="x", pady=5)
@@ -541,22 +579,27 @@ class MacroApp:
         right_frame = ttk.Frame(main_frame)
         right_frame.pack(side="left", fill="both", expand=True)
 
-        # 巨集開始/停止快捷鍵設定區域
-        hotkey_frame = ttk.LabelFrame(right_frame, text="巨集快捷鍵設定 (開始 / 停止 切換)")
+        # 統一巨集開始/停止快捷鍵設定區域
+        # 此快捷鍵為全域單一設定, 按下時會同時切換所有 "已勾選" 巨集的執行狀態
+        hotkey_frame = ttk.LabelFrame(right_frame, text="統一巨集快捷鍵設定 (開始 / 停止 切換, 僅影響清單中已打勾的巨集)")
         hotkey_frame.pack(fill="x", pady=(0, 5))
 
         ttk.Label(hotkey_frame, text="快捷鍵:").grid(row=0, column=0, padx=5, pady=5)
-        self.hotkey_var = tk.StringVar()
-        self.hotkey_entry = ttk.Entry(hotkey_frame, textvariable=self.hotkey_var, width=15)
+        self.global_hotkey_var = tk.StringVar(value=self.global_hotkey)
+        self.hotkey_entry = ttk.Entry(hotkey_frame, textvariable=self.global_hotkey_var, width=15)
         self.hotkey_entry.grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(hotkey_frame, text="錄製",
-                   command=lambda: self.start_key_capture(self.hotkey_var)).grid(row=0, column=2, padx=3, pady=5)
+                   command=lambda: self.start_key_capture(self.global_hotkey_var)).grid(row=0, column=2, padx=3, pady=5)
         ttk.Label(hotkey_frame, text="手動輸入或按「錄製」, 例如 f6").grid(row=0, column=3, padx=5, pady=5)
-        ttk.Button(hotkey_frame, text="套用", command=self.apply_hotkey).grid(row=0, column=4, padx=5, pady=5)
-        ttk.Button(hotkey_frame, text="手動開始/停止", command=self.manual_toggle).grid(row=0, column=5, padx=5, pady=5)
+        ttk.Button(hotkey_frame, text="套用", command=self.apply_global_hotkey).grid(row=0, column=4, padx=5, pady=5)
 
-        self.status_label = ttk.Label(hotkey_frame, text="狀態: 尚未選擇巨集", foreground="gray")
-        self.status_label.grid(row=1, column=0, columnspan=5, padx=5, pady=(0, 5), sticky="w")
+        # 手動控制區域: 不受打勾狀態限制, 永遠可對目前選取的巨集手動開始/停止
+        manual_frame = ttk.LabelFrame(right_frame, text="手動控制 (僅作用於目前選取的巨集, 不受打勾狀態限制)")
+        manual_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Button(manual_frame, text="手動開始/停止", command=self.manual_toggle).grid(row=0, column=0, padx=5, pady=5)
+        self.status_label = ttk.Label(manual_frame, text="狀態: 尚未選擇巨集", foreground="gray")
+        self.status_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
         # 記錄用快捷鍵設定區域
         record_frame = ttk.LabelFrame(right_frame, text="記錄快捷鍵設定 (滑鼠移到目標處後按下, 自動填入目前作用中的表單)")
@@ -595,15 +638,61 @@ class MacroApp:
     # ---------------------- 巨集清單操作 ----------------------
 
     def refresh_profile_list(self):
-        self.profile_listbox.delete(0, tk.END)
+        # 清空後依目前 profiles 重新建立每一列 (打勾選取格 + 巨集名稱)
+        for w in self.profile_list_inner.winfo_children():
+            w.destroy()
+        self.profile_row_widgets = {}
+
         for name in self.profiles:
-            self.profile_listbox.insert(tk.END, name)
+            self.build_profile_row(name)
+
+        self.update_all_row_styles()
+
+    def build_profile_row(self, name):
+        profile = self.profiles[name]
+        row = ttk.Frame(self.profile_list_inner)
+        row.pack(fill="x")
+
+        enabled_var = tk.BooleanVar(value=profile.get("enabled", True))
+        cb = ttk.Checkbutton(
+            row, variable=enabled_var,
+            command=lambda n=name, v=enabled_var: self.on_enabled_toggle(n, v),
+        )
+        cb.pack(side="left", padx=(2, 0))
+
+        label = tk.Label(row, text=name, anchor="w", width=20, cursor="hand2")
+        label.pack(side="left", fill="x", expand=True, padx=(2, 0), pady=1)
+        label.bind("<Button-1>", lambda e, n=name: self.select_profile(n))
+
+        self.profile_row_widgets[name] = {"row": row, "label": label, "var": enabled_var}
+
+    def on_enabled_toggle(self, name, var):
+        # 打勾選取格切換時, 更新該巨集是否受統一快捷鍵控制
+        self.profiles[name]["enabled"] = var.get()
 
     def get_selected_profile(self):
-        selection = self.profile_listbox.curselection()
-        if not selection:
-            return None
-        return self.profile_listbox.get(selection[0])
+        return self.selected_profile_name
+
+    def select_profile(self, name):
+        # 點擊清單項目的名稱文字時, 將其設為目前選取的巨集, 並載入右側步驟編輯區
+        self.selected_profile_name = name
+        self.update_all_row_styles()
+
+        profile = self.profiles[name]
+        self.steps_editor.steps = profile["steps"]
+        self.steps_editor.refresh()
+        self.update_status_label(name)
+
+    def update_all_row_styles(self):
+        # 依目前選取狀態與各巨集執行狀態, 更新清單中每一列的顏色顯示
+        for name, widgets in self.profile_row_widgets.items():
+            label = widgets["label"]
+            is_selected = (name == self.selected_profile_name)
+            is_running = self.running_flags.get(name, False)
+            label.config(
+                bg="#cfe8ff" if is_selected else "SystemButtonFace",
+                fg="green" if is_running else "black",
+            )
 
     def add_profile(self):
         name = simpledialog.askstring("新增巨集", "請輸入巨集名稱, 例如: 按鍵1")
@@ -612,7 +701,7 @@ class MacroApp:
         if name in self.profiles:
             messagebox.showwarning("名稱重複", "此名稱已存在, 請使用其他名稱")
             return
-        self.profiles[name] = {"hotkey": "", "steps": []}
+        self.profiles[name] = {"enabled": True, "steps": []}
         self.running_flags[name] = False
         self.refresh_profile_list()
 
@@ -622,11 +711,10 @@ class MacroApp:
             return
         if messagebox.askyesno("確認刪除", "確定要刪除巨集 [{}] 嗎".format(name)):
             self.stop_macro(name)
-            self.unregister_hotkey(name)
             del self.profiles[name]
             self.running_flags.pop(name, None)
+            self.selected_profile_name = None
             self.refresh_profile_list()
-            self.hotkey_var.set("")
             self.steps_editor.steps = []
             self.steps_editor.refresh()
             self.status_label.config(text="狀態: 尚未選擇巨集", foreground="gray")
@@ -643,60 +731,59 @@ class MacroApp:
             return
 
         self.stop_macro(old_name)
-        self.unregister_hotkey(old_name)
 
         self.profiles[new_name] = self.profiles.pop(old_name)
         self.running_flags[new_name] = self.running_flags.pop(old_name, False)
+        if self.selected_profile_name == old_name:
+            self.selected_profile_name = new_name
 
-        self.register_hotkey(new_name)
         self.refresh_profile_list()
 
-    def on_profile_select(self, event=None):
-        name = self.get_selected_profile()
-        if not name:
-            return
-        profile = self.profiles[name]
-        self.hotkey_var.set(profile.get("hotkey", ""))
-        self.steps_editor.steps = profile["steps"]
-        self.steps_editor.refresh()
-        self.update_status_label(name)
+    # ---------------------- 統一巨集快捷鍵操作 ----------------------
 
-    # ---------------------- 巨集快捷鍵操作 ----------------------
-
-    def apply_hotkey(self):
-        name = self.get_selected_profile()
-        if not name:
-            messagebox.showwarning("尚未選擇", "請先在左側選擇一組巨集")
-            return
-
-        new_hotkey = self.hotkey_var.get().strip()
+    def apply_global_hotkey(self):
+        new_hotkey = self.global_hotkey_var.get().strip()
         if not new_hotkey:
             messagebox.showwarning("輸入錯誤", "請輸入快捷鍵, 例如 f6")
             return
 
-        self.unregister_hotkey(name)
-        self.profiles[name]["hotkey"] = new_hotkey
-        self.register_hotkey(name)
-        messagebox.showinfo("設定完成", "快捷鍵 [{}] 已套用於巨集 [{}]".format(new_hotkey, name))
+        self.unregister_global_hotkey()
+        self.global_hotkey = new_hotkey
+        self.register_global_hotkey()
+        messagebox.showinfo("設定完成", "統一快捷鍵 [{}] 已套用, 將控制所有已打勾的巨集".format(new_hotkey))
 
-    def register_hotkey(self, name):
-        hotkey = self.profiles.get(name, {}).get("hotkey", "")
-        if not hotkey:
+    def register_global_hotkey(self):
+        if not self.global_hotkey:
             return
         try:
-            handle = keyboard.add_hotkey(hotkey, lambda n=name: self.toggle_macro(n))
-            self.hotkey_handles[name] = handle
+            self.global_hotkey_handle = keyboard.add_hotkey(self.global_hotkey, self.toggle_enabled_macros)
         except Exception as e:
-            messagebox.showerror("快捷鍵註冊失敗", "無法註冊快捷鍵 [{}]: {}".format(hotkey, e))
+            messagebox.showerror("快捷鍵註冊失敗", "無法註冊快捷鍵 [{}]: {}".format(self.global_hotkey, e))
 
-    def unregister_hotkey(self, name):
-        handle = self.hotkey_handles.get(name)
-        if handle is not None:
+    def unregister_global_hotkey(self):
+        if self.global_hotkey_handle is not None:
             try:
-                keyboard.remove_hotkey(handle)
+                keyboard.remove_hotkey(self.global_hotkey_handle)
             except Exception:
                 pass
-            self.hotkey_handles.pop(name, None)
+            self.global_hotkey_handle = None
+
+    def toggle_enabled_macros(self):
+        # 統一快捷鍵觸發時的邏輯: 只作用於清單中已打勾 (enabled) 的巨集
+        # 若已打勾的巨集中有任一組正在執行, 則全部停止; 否則將全部已打勾且已設定步驟的巨集開始
+        enabled_names = [n for n, p in self.profiles.items() if p.get("enabled", True)]
+        if not enabled_names:
+            return
+
+        any_running = any(self.running_flags.get(n) for n in enabled_names)
+        if any_running:
+            for n in enabled_names:
+                if self.running_flags.get(n):
+                    self.stop_macro(n)
+        else:
+            for n in enabled_names:
+                if self.profiles[n]["steps"] and not self.running_flags.get(n):
+                    self.start_macro(n)
 
     # ---------------------- 記錄快捷鍵操作 ----------------------
 
@@ -876,6 +963,7 @@ class MacroApp:
         self.threads[name] = thread
         thread.start()
         self.root.after(0, lambda: self.update_status_label(name))
+        self.root.after(0, self.update_all_row_styles)
 
     def _release_all(self):
         for key in list(self._held_keys):
@@ -890,6 +978,7 @@ class MacroApp:
         self.running_flags[name] = False
         self._release_all()
         self.root.after(0, lambda: self.update_status_label(name))
+        self.root.after(0, self.update_all_row_styles)
 
     def run_loop(self, name):
         # 持續執行該巨集的頂層步驟, 直到狀態被設為停止為止
@@ -950,7 +1039,7 @@ class MacroApp:
         if self.get_selected_profile() != name:
             return
         if self.running_flags.get(name):
-            self.status_label.config(text="狀態: 執行中 (快捷鍵可再次按下以停止)", foreground="green")
+            self.status_label.config(text="狀態: 執行中 (可再次按手動按鈕或統一快捷鍵停止)", foreground="green")
         else:
             self.status_label.config(text="狀態: 已停止", foreground="red")
 
@@ -962,7 +1051,7 @@ class MacroApp:
             self._hook_id = None
         for name in list(self.profiles.keys()):
             self.stop_macro(name)
-            self.unregister_hotkey(name)
+        self.unregister_global_hotkey()
         self.unregister_record_hotkeys()
         self.root.destroy()
 
