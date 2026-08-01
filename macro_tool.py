@@ -428,9 +428,15 @@ class StepsEditor:
         return ""
 
     def refresh(self):
+        # 記住目前的選取位置, 重建後恢復, 避免捲動跳回最上方
+        sel = self.listbox.curselection()
+        selected = sel[0] if sel else None
         self.listbox.delete(0, tk.END)
         for idx, step in enumerate(self.steps, start=1):
             self.listbox.insert(tk.END, "{}. {}".format(idx, self.format_step(step)))
+        if selected is not None and selected < len(self.steps):
+            self.listbox.selection_set(selected)
+            self.listbox.see(selected)
         # 子步驟編輯器變動時, 同步更新上層畫面的顯示
         if self.parent_editor is not None:
             self.parent_editor.refresh()
@@ -673,6 +679,7 @@ class StepsEditor:
         self.steps[idx - 1], self.steps[idx] = self.steps[idx], self.steps[idx - 1]
         self.refresh()
         self.listbox.selection_set(idx - 1)
+        self.listbox.see(idx - 1)
 
     def move_down(self):
         idx = self.get_selected_index()
@@ -681,6 +688,7 @@ class StepsEditor:
         self.steps[idx + 1], self.steps[idx] = self.steps[idx], self.steps[idx + 1]
         self.refresh()
         self.listbox.selection_set(idx + 1)
+        self.listbox.see(idx + 1)
 
     def move_to_top(self):
         # 將選取的步驟移到清單最上方
@@ -691,6 +699,7 @@ class StepsEditor:
         self.steps.insert(0, step)
         self.refresh()
         self.listbox.selection_set(0)
+        self.listbox.see(0)
 
     def move_to_bottom(self):
         # 將選取的步驟移到清單最下方
@@ -701,6 +710,7 @@ class StepsEditor:
         self.steps.append(step)
         self.refresh()
         self.listbox.selection_set(len(self.steps) - 1)
+        self.listbox.see(len(self.steps) - 1)
 
     def delete_step(self):
         idx = self.get_selected_index()
@@ -712,6 +722,7 @@ class StepsEditor:
         if self.steps:
             next_idx = min(idx, len(self.steps) - 1)
             self.listbox.selection_set(next_idx)
+            self.listbox.see(next_idx)
 
     def edit_children(self):
         idx = self.get_selected_index()
@@ -919,9 +930,26 @@ class MacroApp:
         ttk.Button(rename_frame, text="複製", command=self.copy_profile).pack(side="left", expand=True, fill="x")
         ttk.Button(left_frame, text="儲存全部設定", command=self.save_data).pack(fill="x", pady=(10, 2))
 
-        # 右側: 選定巨集的詳細設定
-        right_frame = ttk.Frame(main_frame)
-        right_frame.pack(side="left", fill="both", expand=True)
+        # 右側: 選定巨集的詳細設定 (可上下捲動)
+        right_canvas = tk.Canvas(main_frame, highlightthickness=0)
+        right_scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_scrollbar.set)
+        right_frame = ttk.Frame(right_canvas)
+        right_frame.bind(
+            "<Configure>",
+            lambda e: right_canvas.configure(scrollregion=right_canvas.bbox("all")),
+        )
+
+        def _sync_right_width(event):
+            # 內層寬度跟隨捲動區寬度, 讓 fill="x" 的子元件正常貼合
+            right_canvas.itemconfigure(_sync_right_width.window_id, width=event.width)
+        _sync_right_width.window_id = right_canvas.create_window((0, 0), window=right_frame, anchor="nw")
+
+        right_canvas.bind("<Configure>", _sync_right_width)
+        right_canvas.bind("<MouseWheel>", lambda e: right_canvas.yview_scroll(int(-e.delta / 120), "units"))
+
+        right_canvas.pack(side="left", fill="both", expand=True)
+        right_scrollbar.pack(side="left", fill="y")
 
         # 統一巨集開始/停止快捷鍵設定區域
         # 此快捷鍵為全域單一設定, 按下時會同時切換所有 "已勾選" 巨集的執行狀態
