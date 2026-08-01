@@ -171,6 +171,8 @@ class StepsEditor:
         btn_frame.pack(side="left", fill="y", padx=5)
         ttk.Button(btn_frame, text="上移", command=self.move_up).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="下移", command=self.move_down).pack(fill="x", pady=2)
+        ttk.Button(btn_frame, text="移到最上", command=self.move_to_top).pack(fill="x", pady=2)
+        ttk.Button(btn_frame, text="移到最下", command=self.move_to_bottom).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="刪除", command=self.delete_step).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="編輯", command=self.edit_selected_step).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="編輯子步驟", command=self.edit_children).pack(fill="x", pady=(10, 2))
@@ -464,6 +466,26 @@ class StepsEditor:
         self.steps[idx + 1], self.steps[idx] = self.steps[idx], self.steps[idx + 1]
         self.refresh()
         self.listbox.selection_set(idx + 1)
+
+    def move_to_top(self):
+        # 將選取的步驟移到清單最上方
+        idx = self.get_selected_index()
+        if idx is None or idx == 0:
+            return
+        step = self.steps.pop(idx)
+        self.steps.insert(0, step)
+        self.refresh()
+        self.listbox.selection_set(0)
+
+    def move_to_bottom(self):
+        # 將選取的步驟移到清單最下方
+        idx = self.get_selected_index()
+        if idx is None or idx >= len(self.steps) - 1:
+            return
+        step = self.steps.pop(idx)
+        self.steps.append(step)
+        self.refresh()
+        self.listbox.selection_set(len(self.steps) - 1)
 
     def delete_step(self):
         idx = self.get_selected_index()
