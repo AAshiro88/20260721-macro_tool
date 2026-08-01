@@ -16,6 +16,7 @@ import json
 import os
 import time
 import threading
+import copy
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
@@ -53,6 +54,7 @@ STEP_TYPE_DISPLAY = {
     "find_window_move": "尋找視窗並固定位置",
     "if_color": "判斷顏色 (符合則執行子步驟)",
     "if_image": "判斷圖片 (符合則執行子步驟)",
+    "if_key": "判斷按鍵 (按下則執行子步驟)",
 }
 STEP_TYPE_REVERSE = {v: k for k, v in STEP_TYPE_DISPLAY.items()}
 
@@ -60,7 +62,7 @@ STEP_TYPE_REVERSE = {v: k for k, v in STEP_TYPE_DISPLAY.items()}
 TOP_LEVEL_TYPES = [
     "key_down", "key_up", "key_click",
     "move_mouse", "mouse_down", "mouse_up", "mouse_click",
-    "wait", "find_window_move", "if_color", "if_image",
+    "wait", "find_window_move", "if_color", "if_image", "if_key",
 ]
 
 # 判斷條件內部子步驟允許的類型 (不包含判斷類型, 避免無限巢狀)
@@ -149,6 +151,8 @@ class StepsEditor:
         self.parent_editor = parent_editor
         # 目前正在編輯的步驟索引, None 表示新增模式
         self._editing_index = None
+        # 記錄快捷鍵填入的目標欄位: "main" 表示主條件欄位, "exit" 表示退出條件欄位
+        self.capture_target = "main"
 
         self.frame = ttk.LabelFrame(master, text="動作步驟 (依序由上往下執行)")
         self.frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -205,17 +209,24 @@ class StepsEditor:
     def get_selected_type(self):
         return STEP_TYPE_REVERSE[self.type_var.get()]
 
-    def add_field(self, label, var, row, col, width=15, colspan=1):
-        ttk.Label(self.fields_frame, text=label).grid(row=row, column=col, padx=5, pady=3, sticky="w")
-        entry = ttk.Entry(self.fields_frame, textvariable=var, width=width)
+    def add_field(self, label, var, row, col, width=15, colspan=1, target="main", frame=None):
+        parent = frame if frame is not None else self.fields_frame
+        ttk.Label(parent, text=label).grid(row=row, column=col, padx=5, pady=3, sticky="w")
+        entry = ttk.Entry(parent, textvariable=var, width=width)
         entry.grid(row=row, column=col + 1, padx=5, pady=3, sticky="w", columnspan=colspan)
-        entry.bind("<FocusIn>", lambda e: self.set_active())
+        entry.bind("<FocusIn>", lambda e, tg=target: self.on_field_focus(tg))
         return entry
+
+    def on_field_focus(self, target):
+        # 欄位取得焦點時, 記錄此編輯器為作用中, 並設定快捷鍵填入的目標欄位
+        self.set_active()
+        self.capture_target = target
 
     def rebuild_fields(self):
         # 依照目前選擇的動作類型, 重新產生對應的輸入欄位
         for w in self.fields_frame.winfo_children():
             w.destroy()
+        self.capture_target = "main"
 
         t = self.get_selected_type()
 
@@ -272,6 +283,7 @@ class StepsEditor:
             ttk.Label(
                 self.fields_frame, text="按下設定的抓取顏色快捷鍵, 可自動抓取目前滑鼠位置與該處顏色"
             ).grid(row=2, column=0, columnspan=4, sticky="w", padx=5)
+            self.build_loop_exit_fields()
 
         elif t == "if_image":
             self.rx1_var = tk.StringVar()
@@ -290,6 +302,88 @@ class StepsEditor:
                 self.fields_frame,
                 text="先在區塊左上角按下區塊起點快捷鍵, 移到右下角再按區塊終點快捷鍵, 會自動擷取並儲存圖片",
             ).grid(row=4, column=0, columnspan=4, sticky="w", padx=5)
+            self.build_loop_exit_fields()
+
+        elif t == "if_key":
+            self.key_var = tk.StringVar()
+            self.add_field("按鍵名稱:", self.key_var, row=0, col=0, width=15)
+            ttk.Button(self.fields_frame, text="錄製",
+                       command=lambda: self.app.start_key_capture(self.key_var)).grid(row=0, column=2, padx=5, pady=3)
+            ttk.Label(self.fields_frame, text="條件為該按鍵被按住時成立").grid(
+                row=1, column=0, columnspan=4, sticky="w", padx=5
+            )
+            self.build_loop_exit_fields()
+
+    def build_loop_exit_fields(self):
+        # 在判斷類型表單下方新增「執行次數」與「退出條件」設定區塊
+        self.loop_exit_frame = ttk.Frame(self.fields_frame)
+        self.loop_exit_frame.grid(row=10, column=0, columnspan=4, sticky="w")
+
+        self.loop_times_var = tk.StringVar(value="1")
+        ttk.Label(self.loop_exit_frame, text="子步驟執行次數(0=無限):").grid(row=0, column=0, padx=5, pady=3, sticky="w")
+        ttk.Entry(self.loop_exit_frame, textvariable=self.loop_times_var, width=8).grid(row=0, column=1, padx=5, pady=3, sticky="w")
+
+        ttk.Label(self.loop_exit_frame, text="退出條件:").grid(row=1, column=0, padx=5, pady=3, sticky="w")
+        self.exit_type_var = tk.StringVar(value="不設定")
+        exit_combo = ttk.Combobox(
+            self.loop_exit_frame, textvariable=self.exit_type_var,
+            values=["不設定", "退出顏色", "退出圖片", "退出按鍵"], state="readonly", width=12
+        )
+        exit_combo.grid(row=1, column=1, padx=5, pady=3, sticky="w")
+        exit_combo.bind("<<ComboboxSelected>>", lambda e: self.rebuild_exit_fields())
+
+        self.exit_fields_frame = ttk.Frame(self.loop_exit_frame)
+        self.exit_fields_frame.grid(row=2, column=0, columnspan=4, sticky="w")
+
+        self.rebuild_exit_fields()
+
+    def rebuild_exit_fields(self):
+        # 依選擇的退出條件類型, 動態建立對應的輸入欄位
+        for w in self.exit_fields_frame.winfo_children():
+            w.destroy()
+
+        t = self.exit_type_var.get()
+        if t == "不設定":
+            return
+
+        if t == "退出顏色":
+            self.exit_x_var = tk.StringVar()
+            self.exit_y_var = tk.StringVar()
+            self.exit_color_var = tk.StringVar()
+            self.exit_tolerance_var = tk.StringVar(value="20")
+            self.add_field("X:", self.exit_x_var, row=0, col=0, width=8, target="exit", frame=self.exit_fields_frame)
+            self.add_field("Y:", self.exit_y_var, row=0, col=2, width=8, target="exit", frame=self.exit_fields_frame)
+            self.add_field("顏色:", self.exit_color_var, row=1, col=0, width=10, target="exit", frame=self.exit_fields_frame)
+            self.add_field("誤差:", self.exit_tolerance_var, row=1, col=2, width=8, target="exit", frame=self.exit_fields_frame)
+            ttk.Label(self.exit_fields_frame, text="按下抓取顏色快捷鍵可填入此處").grid(
+                row=2, column=0, columnspan=4, sticky="w", padx=5
+            )
+
+        elif t == "退出圖片":
+            self.exit_rx1_var = tk.StringVar()
+            self.exit_ry1_var = tk.StringVar()
+            self.exit_rx2_var = tk.StringVar()
+            self.exit_ry2_var = tk.StringVar()
+            self.exit_image_path_var = tk.StringVar()
+            self.exit_confidence_var = tk.StringVar(value="0.9")
+            self.add_field("左上X:", self.exit_rx1_var, row=0, col=0, width=8, target="exit", frame=self.exit_fields_frame)
+            self.add_field("左上Y:", self.exit_ry1_var, row=0, col=2, width=8, target="exit", frame=self.exit_fields_frame)
+            self.add_field("右下X:", self.exit_rx2_var, row=1, col=0, width=8, target="exit", frame=self.exit_fields_frame)
+            self.add_field("右下Y:", self.exit_ry2_var, row=1, col=2, width=8, target="exit", frame=self.exit_fields_frame)
+            self.add_field("圖片:", self.exit_image_path_var, row=2, col=0, width=32, colspan=3, target="exit", frame=self.exit_fields_frame)
+            self.add_field("辨識率:", self.exit_confidence_var, row=3, col=0, width=8, target="exit", frame=self.exit_fields_frame)
+            ttk.Label(self.exit_fields_frame, text="按下區塊起點/終點快捷鍵可擷取此處圖片").grid(
+                row=4, column=0, columnspan=4, sticky="w", padx=5
+            )
+
+        elif t == "退出按鍵":
+            self.exit_key_var = tk.StringVar()
+            self.add_field("按鍵名稱:", self.exit_key_var, row=0, col=0, width=15, target="exit", frame=self.exit_fields_frame)
+            ttk.Button(self.exit_fields_frame, text="錄製",
+                       command=lambda: self.app.start_key_capture(self.exit_key_var)).grid(row=0, column=2, padx=5, pady=3)
+            ttk.Label(self.exit_fields_frame, text="按下此按鍵時跳出迴圈").grid(
+                row=1, column=0, columnspan=4, sticky="w", padx=5
+            )
 
     def format_step(self, step):
         t = step["type"]
@@ -304,15 +398,34 @@ class StepsEditor:
             return "{} [{} 秒]".format(display, step["seconds"])
         if t == "find_window_move":
             return "{} [標題含:{} -> ({},{})]".format(display, step["title"], step["x"], step["y"])
-        if t == "if_color":
-            return "{} [({},{}) = #{} 誤差{}] -> 內含{}個子步驟".format(
-                display, step["x"], step["y"], step["color"], step["tolerance"], len(step.get("then", []))
-            )
-        if t == "if_image":
-            return "{} [區塊({},{})-({},{}) 辨識率{}] -> 內含{}個子步驟".format(
-                display, step["rx1"], step["ry1"], step["rx2"], step["ry2"], step["confidence"], len(step.get("then", []))
+        if t in ("if_color", "if_image", "if_key"):
+            loop_times = int(step.get("loop_times", 1))
+            loop_text = "無限" if loop_times == 0 else "{}次".format(loop_times)
+            ex_text = self.format_exit_condition(step.get("exit_condition"))
+            if t == "if_color":
+                base = "{} [({},{}) = #{} 誤差{}]".format(display, step["x"], step["y"], step["color"], step["tolerance"])
+            elif t == "if_image":
+                base = "{} [區塊({},{})-({},{}) 辨識率{}]".format(
+                    display, step["rx1"], step["ry1"], step["rx2"], step["ry2"], step["confidence"]
+                )
+            else:
+                base = "{} [{}]".format(display, step["key"])
+            return "{} 執行{} -> 內含{}個子步驟{}".format(
+                base, loop_text, len(step.get("then", [])), ex_text
             )
         return display
+
+    def format_exit_condition(self, ex):
+        # 將退出條件轉成顯示文字, 未設定回傳空字串
+        if not ex:
+            return ""
+        if ex.get("type") == "if_color":
+            return " 退出:顏色(#{} 誤差{})".format(ex["color"], ex["tolerance"])
+        if ex.get("type") == "if_image":
+            return " 退出:圖片(辨識率{})".format(ex["confidence"])
+        if ex.get("type") == "if_key":
+            return " 退出:按鍵({})".format(ex["key"])
+        return ""
 
     def refresh(self):
         self.listbox.delete(0, tk.END)
@@ -379,12 +492,17 @@ class StepsEditor:
             if len(color) != 6:
                 messagebox.showwarning("輸入錯誤", "顏色請輸入 6 碼十六進位, 例如 554941")
                 return None
+            exit_condition = self.build_exit_condition_from_fields()
+            if exit_condition is None and self.exit_type_var.get() != "不設定":
+                return None
             return {
                 "type": t,
                 "x": int(self.x_var.get()),
                 "y": int(self.y_var.get()),
                 "color": color,
                 "tolerance": int(self.tolerance_var.get()),
+                "loop_times": int(self.loop_times_var.get()),
+                "exit_condition": exit_condition,
                 "then": [],
             }
 
@@ -392,6 +510,9 @@ class StepsEditor:
             image_path = self.image_path_var.get().strip()
             if not image_path or not os.path.exists(image_path):
                 messagebox.showwarning("輸入錯誤", "請先使用區塊快捷鍵擷取圖片, 或確認圖片檔案存在")
+                return None
+            exit_condition = self.build_exit_condition_from_fields()
+            if exit_condition is None and self.exit_type_var.get() != "不設定":
                 return None
             return {
                 "type": t,
@@ -401,8 +522,64 @@ class StepsEditor:
                 "ry2": int(self.ry2_var.get()),
                 "image_path": image_path,
                 "confidence": float(self.confidence_var.get()),
+                "loop_times": int(self.loop_times_var.get()),
+                "exit_condition": exit_condition,
                 "then": [],
             }
+
+        elif t == "if_key":
+            key = self.key_var.get().strip()
+            if not key:
+                messagebox.showwarning("輸入錯誤", "請輸入按鍵名稱")
+                return None
+            exit_condition = self.build_exit_condition_from_fields()
+            if exit_condition is None and self.exit_type_var.get() != "不設定":
+                return None
+            return {
+                "type": t,
+                "key": key,
+                "loop_times": int(self.loop_times_var.get()),
+                "exit_condition": exit_condition,
+                "then": [],
+            }
+        return None
+
+    def build_exit_condition_from_fields(self):
+        # 依目前退出條件表單內容組出 exit_condition 資料, 未設定回傳 None
+        t = self.exit_type_var.get()
+        try:
+            if t == "退出顏色":
+                color = self.exit_color_var.get().strip().lstrip("#").upper()
+                if len(color) != 6:
+                    raise ValueError
+                return {
+                    "type": "if_color",
+                    "x": int(self.exit_x_var.get()),
+                    "y": int(self.exit_y_var.get()),
+                    "color": color,
+                    "tolerance": int(self.exit_tolerance_var.get()),
+                }
+            elif t == "退出圖片":
+                image_path = self.exit_image_path_var.get().strip()
+                if not image_path or not os.path.exists(image_path):
+                    raise ValueError
+                return {
+                    "type": "if_image",
+                    "rx1": int(self.exit_rx1_var.get()),
+                    "ry1": int(self.exit_ry1_var.get()),
+                    "rx2": int(self.exit_rx2_var.get()),
+                    "ry2": int(self.exit_ry2_var.get()),
+                    "image_path": image_path,
+                    "confidence": float(self.exit_confidence_var.get()),
+                }
+            elif t == "退出按鍵":
+                key = self.exit_key_var.get().strip()
+                if not key:
+                    raise ValueError
+                return {"type": "if_key", "key": key}
+        except ValueError:
+            messagebox.showwarning("輸入錯誤", "退出條件欄位請檢查: 顏色需 6 碼, 圖片需存在, 數值格式正確")
+            return None
         return None
 
     def edit_selected_step(self):
@@ -440,6 +617,7 @@ class StepsEditor:
             self.y_var.set(str(step["y"]))
             self.color_var.set(step["color"])
             self.tolerance_var.set(str(step["tolerance"]))
+            self.fill_loop_exit_from_step(step)
         elif t == "if_image":
             self.rx1_var.set(str(step["rx1"]))
             self.ry1_var.set(str(step["ry1"]))
@@ -447,6 +625,38 @@ class StepsEditor:
             self.ry2_var.set(str(step["ry2"]))
             self.image_path_var.set(step["image_path"])
             self.confidence_var.set(str(step["confidence"]))
+            self.fill_loop_exit_from_step(step)
+        elif t == "if_key":
+            self.key_var.set(step["key"])
+            self.fill_loop_exit_from_step(step)
+
+    def fill_loop_exit_from_step(self, step):
+        # 將步驟的執行次數與退出條件回填到表單
+        self.loop_times_var.set(str(step.get("loop_times", 1)))
+        ex = step.get("exit_condition")
+        if ex and ex.get("type") == "if_color":
+            self.exit_type_var.set("退出顏色")
+            self.rebuild_exit_fields()
+            self.exit_x_var.set(str(ex["x"]))
+            self.exit_y_var.set(str(ex["y"]))
+            self.exit_color_var.set(ex["color"])
+            self.exit_tolerance_var.set(str(ex["tolerance"]))
+        elif ex and ex.get("type") == "if_image":
+            self.exit_type_var.set("退出圖片")
+            self.rebuild_exit_fields()
+            self.exit_rx1_var.set(str(ex["rx1"]))
+            self.exit_ry1_var.set(str(ex["ry1"]))
+            self.exit_rx2_var.set(str(ex["rx2"]))
+            self.exit_ry2_var.set(str(ex["ry2"]))
+            self.exit_image_path_var.set(ex["image_path"])
+            self.exit_confidence_var.set(str(ex["confidence"]))
+        elif ex and ex.get("type") == "if_key":
+            self.exit_type_var.set("退出按鍵")
+            self.rebuild_exit_fields()
+            self.exit_key_var.set(ex["key"])
+        else:
+            self.exit_type_var.set("不設定")
+            self.rebuild_exit_fields()
 
     def cancel_edit(self):
         # 取消編輯模式, 表單恢復成新增狀態
@@ -509,8 +719,8 @@ class StepsEditor:
             messagebox.showinfo("提示", "請先選擇一個步驟")
             return
         step = self.steps[idx]
-        if step["type"] not in ("if_color", "if_image"):
-            messagebox.showinfo("提示", "只有判斷顏色或判斷圖片的步驟可以編輯子步驟")
+        if step["type"] not in ("if_color", "if_image", "if_key"):
+            messagebox.showinfo("提示", "只有判斷顏色/圖片/按鍵的步驟可以編輯子步驟")
             return
         step.setdefault("then", [])
 
@@ -523,23 +733,40 @@ class StepsEditor:
 
     def capture_position(self, x, y):
         t = self.get_selected_type()
-        if t in ("move_mouse", "find_window_move", "if_color") and hasattr(self, "x_var"):
+        if self.capture_target == "exit" and t in ("if_color", "if_image", "if_key") and hasattr(self, "exit_x_var"):
+            self.exit_x_var.set(str(x))
+            self.exit_y_var.set(str(y))
+        elif t in ("move_mouse", "find_window_move", "if_color") and hasattr(self, "x_var"):
             self.x_var.set(str(x))
             self.y_var.set(str(y))
 
     def capture_color(self, x, y, hex_color):
-        if self.get_selected_type() == "if_color" and hasattr(self, "color_var"):
+        t = self.get_selected_type()
+        if self.capture_target == "exit" and t in ("if_color", "if_image", "if_key") and hasattr(self, "exit_color_var"):
+            self.exit_x_var.set(str(x))
+            self.exit_y_var.set(str(y))
+            self.exit_color_var.set(hex_color)
+        elif t == "if_color" and hasattr(self, "color_var"):
             self.x_var.set(str(x))
             self.y_var.set(str(y))
             self.color_var.set(hex_color)
 
     def capture_region_start(self, x, y):
-        if self.get_selected_type() == "if_image" and hasattr(self, "rx1_var"):
+        t = self.get_selected_type()
+        if self.capture_target == "exit" and t in ("if_color", "if_image", "if_key") and hasattr(self, "exit_rx1_var"):
+            self.exit_rx1_var.set(str(x))
+            self.exit_ry1_var.set(str(y))
+        elif t == "if_image" and hasattr(self, "rx1_var"):
             self.rx1_var.set(str(x))
             self.ry1_var.set(str(y))
 
     def capture_region_end(self, x, y):
-        if self.get_selected_type() == "if_image" and hasattr(self, "rx2_var"):
+        t = self.get_selected_type()
+        if self.capture_target == "exit" and t in ("if_color", "if_image", "if_key") and hasattr(self, "exit_rx2_var"):
+            self.exit_rx2_var.set(str(x))
+            self.exit_ry2_var.set(str(y))
+            self.app.capture_and_save_image(self, target="exit")
+        elif t == "if_image" and hasattr(self, "rx2_var"):
             self.rx2_var.set(str(x))
             self.ry2_var.set(str(y))
             self.app.capture_and_save_image(self)
@@ -600,12 +827,18 @@ class MacroApp:
         self.mouse_monitor_on = False
         self._mouse_monitor_after = None
 
+        # 最小化小視窗相關狀態
+        self.mini_window = None
+        self.mini_widgets = {}
+        self._mini_refresh_after = None
+
         self.load_data()
         self.build_ui()
         self.refresh_profile_list()
         self.register_record_hotkeys()
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.bind("<Unmap>", self.on_unmap)
 
         # 程式啟動時, 依照已儲存的設定重新註冊統一快捷鍵
         self.register_global_hotkey()
@@ -680,7 +913,10 @@ class MacroApp:
         ttk.Button(profile_btn_frame, text="新增", command=self.add_profile).pack(side="left", expand=True, fill="x")
         ttk.Button(profile_btn_frame, text="刪除", command=self.delete_profile).pack(side="left", expand=True, fill="x")
 
-        ttk.Button(left_frame, text="重新命名", command=self.rename_profile).pack(fill="x", pady=2)
+        rename_frame = ttk.Frame(left_frame)
+        rename_frame.pack(fill="x", pady=2)
+        ttk.Button(rename_frame, text="重新命名", command=self.rename_profile).pack(side="left", expand=True, fill="x")
+        ttk.Button(rename_frame, text="複製", command=self.copy_profile).pack(side="left", expand=True, fill="x")
         ttk.Button(left_frame, text="儲存全部設定", command=self.save_data).pack(fill="x", pady=(10, 2))
 
         # 右側: 選定巨集的詳細設定
@@ -864,6 +1100,26 @@ class MacroApp:
 
         self.refresh_profile_list()
 
+    def copy_profile(self):
+        # 複製目前選取的巨集, 產生一份內容相同的新巨集
+        old_name = self.get_selected_profile()
+        if not old_name:
+            messagebox.showwarning("尚未選擇", "請先選擇要複製的巨集")
+            return
+        new_name = simpledialog.askstring("複製巨集", "請輸入新巨集名稱", initialvalue="{}_複製".format(old_name))
+        if not new_name:
+            return
+        if new_name in self.profiles:
+            messagebox.showwarning("名稱重複", "此名稱已存在, 請使用其他名稱")
+            return
+
+        # 使用深複製, 避免新舊巨集共用同一份步驟資料
+        self.profiles[new_name] = copy.deepcopy(self.profiles[old_name])
+        self.running_flags[new_name] = False
+        self.selected_profile_name = new_name
+        self.refresh_profile_list()
+        self.select_profile(new_name)
+
     # ---------------------- 統一巨集快捷鍵操作 ----------------------
 
     def apply_global_hotkey(self):
@@ -986,6 +1242,81 @@ class MacroApp:
             self.mouse_monitor_color_label.config(background="lightgray")
         self._mouse_monitor_after = self.root.after(80, self.update_mouse_monitor)
 
+    # ---------------------- 最小化小視窗 ----------------------
+
+    def on_unmap(self, event=None):
+        # 主視窗被最小化時 (state 變為 iconic), 隱藏主視窗並顯示小視窗
+        if self.mini_window is not None:
+            return
+        try:
+            if self.root.state() == "iconic":
+                self.root.withdraw()
+                self.build_mini_window()
+        except Exception:
+            pass
+
+    def build_mini_window(self):
+        # 建立顯示巨集執行狀態的小視窗
+        self.mini_window = tk.Toplevel(self.root)
+        self.mini_window.title("巨集執行狀態")
+        self.mini_window.attributes("-topmost", True)
+        sw = self.mini_window.winfo_screenwidth()
+        sh = self.mini_window.winfo_screenheight()
+        self.mini_window.geometry("260x400+{}+{}".format(sw - 280, sh - 440))
+        ttk.Label(self.mini_window, text="巨集執行狀態 (打勾表示受統一快捷鍵控制)").pack(padx=5, pady=5)
+        self.mini_list_frame = ttk.Frame(self.mini_window)
+        self.mini_list_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.mini_toggle_btn = ttk.Button(self.mini_window, text="開始全部",
+                                          command=self.toggle_enabled_macros)
+        self.mini_toggle_btn.pack(fill="x", padx=5, pady=2)
+        ttk.Button(self.mini_window, text="還原主視窗",
+                   command=self.restore_from_mini).pack(fill="x", padx=5, pady=(2, 5))
+        self.mini_window.protocol("WM_DELETE_WINDOW", self.restore_from_mini)
+        self._mini_refresh_after = self.root.after(300, self.refresh_mini_window)
+
+    def refresh_mini_window(self):
+        # 定期更新小視窗的執行狀態顯示
+        if self.mini_window is None:
+            self._mini_refresh_after = None
+            return
+        if set(self.mini_widgets.keys()) != set(self.profiles.keys()):
+            for w in self.mini_list_frame.winfo_children():
+                w.destroy()
+            self.mini_widgets = {}
+            for name in self.profiles:
+                row = ttk.Frame(self.mini_list_frame)
+                row.pack(fill="x")
+                enabled_var = tk.BooleanVar(value=self.profiles[name].get("enabled", True))
+                ttk.Checkbutton(row, variable=enabled_var,
+                                command=lambda n=name, v=enabled_var: self.on_enabled_toggle(n, v)).pack(side="left")
+                ttk.Label(row, text=name, width=12).pack(side="left", padx=(2, 5))
+                status_label = ttk.Label(row, foreground="gray")
+                status_label.pack(side="right", padx=5)
+                self.mini_widgets[name] = status_label
+        for name, label in self.mini_widgets.items():
+            running = self.running_flags.get(name, False)
+            label.config(text="執行中" if running else "已停止",
+                         foreground="green" if running else "gray")
+        # 依執行狀態動態切換按鈕文字
+        enabled_names = [n for n, p in self.profiles.items() if p.get("enabled", True)]
+        any_running = any(self.running_flags.get(n) for n in enabled_names)
+        self.mini_toggle_btn.config(text="停止全部" if any_running else "開始全部")
+        self._mini_refresh_after = self.root.after(300, self.refresh_mini_window)
+
+    def restore_from_mini(self):
+        # 從小視窗還原主視窗
+        if self._mini_refresh_after is not None:
+            self.root.after_cancel(self._mini_refresh_after)
+            self._mini_refresh_after = None
+        if self.mini_window is not None:
+            self.mini_window.destroy()
+            self.mini_window = None
+        self.mini_widgets = {}
+        self.root.deiconify()
+        self.root.lift()
+        # 同步主畫面左側清單的打勾狀態
+        self.refresh_profile_list()
+
     # ---------------------- 按鍵錄製功能 ----------------------
 
     _MODIFIER_KEYS = {'ctrl', 'ctrl_l', 'ctrl_r', 'alt', 'alt_l', 'alt_r',
@@ -1066,13 +1397,26 @@ class MacroApp:
         x, y = int(x), int(y)
         self.root.after(0, lambda: self.active_step_editor.capture_region_end(x, y))
 
-    def capture_and_save_image(self, editor):
+    def capture_and_save_image(self, editor, target="main"):
         # 讀取編輯器目前的區塊座標, 排序後擷取畫面並儲存成 png 檔案
+        # target 決定填入主條件或退出條件的區塊欄位
+        if target == "exit":
+            var_x1 = editor.exit_rx1_var
+            var_y1 = editor.exit_ry1_var
+            var_x2 = editor.exit_rx2_var
+            var_y2 = editor.exit_ry2_var
+            var_path = editor.exit_image_path_var
+        else:
+            var_x1 = editor.rx1_var
+            var_y1 = editor.ry1_var
+            var_x2 = editor.rx2_var
+            var_y2 = editor.ry2_var
+            var_path = editor.image_path_var
         try:
-            x1 = int(editor.rx1_var.get())
-            y1 = int(editor.ry1_var.get())
-            x2 = int(editor.rx2_var.get())
-            y2 = int(editor.ry2_var.get())
+            x1 = int(var_x1.get())
+            y1 = int(var_y1.get())
+            x2 = int(var_x2.get())
+            y2 = int(var_y2.get())
         except ValueError:
             return
 
@@ -1082,10 +1426,10 @@ class MacroApp:
             messagebox.showwarning("擷取失敗", "區塊範圍過小, 請重新選取")
             return
 
-        editor.rx1_var.set(str(x1))
-        editor.ry1_var.set(str(y1))
-        editor.rx2_var.set(str(x2))
-        editor.ry2_var.set(str(y2))
+        var_x1.set(str(x1))
+        var_y1.set(str(y1))
+        var_x2.set(str(x2))
+        var_y2.set(str(y2))
 
         filename = "pic_{}.png".format(int(time.time() * 1000))
         filepath = os.path.join(PICS_DIR, filename)
@@ -1096,7 +1440,7 @@ class MacroApp:
             messagebox.showerror("擷取失敗", str(e))
             return
 
-        editor.image_path_var.set(filepath)
+        var_path.set(filepath)
 
     # ---------------------- 巨集執行邏輯 ----------------------
 
@@ -1187,14 +1531,46 @@ class MacroApp:
         elif step_type == "find_window_move":
             find_and_move_window(step["title"], step["x"], step["y"])
 
-        elif step_type == "if_color":
-            if check_color(step["x"], step["y"], step["color"], step["tolerance"]):
+        elif step_type in ("if_color", "if_image", "if_key"):
+            if step_type == "if_color":
+                matched = check_color(step["x"], step["y"], step["color"], step["tolerance"])
+            elif step_type == "if_image":
+                region = (step["rx1"], step["ry1"], step["rx2"], step["ry2"])
+                matched = check_image(region, step["image_path"], step["confidence"])
+            else:
+                try:
+                    matched = keyboard.is_pressed(step["key"])
+                except Exception:
+                    matched = False
+            if not matched:
+                return
+            # 條件符合時迴圈執行子步驟, 直到次數用完或退出條件出現
+            loop_times = int(step.get("loop_times", 1))
+            count = 0
+            while self.running_flags.get(name):
                 self.execute_steps(name, step.get("then", []))
+                count += 1
+                if loop_times and count >= loop_times:
+                    break
+                if self.check_exit_condition(step):
+                    break
 
-        elif step_type == "if_image":
-            region = (step["rx1"], step["ry1"], step["rx2"], step["ry2"])
-            if check_image(region, step["image_path"], step["confidence"]):
-                self.execute_steps(name, step.get("then", []))
+    def check_exit_condition(self, step):
+        # 檢查迴圈的退出條件 (指定的另一個圖, 色或按鍵)
+        ex = step.get("exit_condition")
+        if not ex:
+            return False
+        try:
+            if ex.get("type") == "if_color":
+                return check_color(ex["x"], ex["y"], ex["color"], ex["tolerance"])
+            if ex.get("type") == "if_image":
+                region = (ex["rx1"], ex["ry1"], ex["rx2"], ex["ry2"])
+                return check_image(region, ex["image_path"], ex["confidence"])
+            if ex.get("type") == "if_key":
+                return keyboard.is_pressed(ex["key"])
+        except Exception:
+            return False
+        return False
 
     def update_status_label(self, name):
         if self.get_selected_profile() != name:
@@ -1213,6 +1589,12 @@ class MacroApp:
         if self._mouse_monitor_after is not None:
             self.root.after_cancel(self._mouse_monitor_after)
             self._mouse_monitor_after = None
+        if self._mini_refresh_after is not None:
+            self.root.after_cancel(self._mini_refresh_after)
+            self._mini_refresh_after = None
+        if self.mini_window is not None:
+            self.mini_window.destroy()
+            self.mini_window = None
         for name in list(self.profiles.keys()):
             self.stop_macro(name)
         self.unregister_global_hotkey()
