@@ -145,6 +145,8 @@ class StepsEditor:
         self.app = app
         self.steps = steps
         self.allowed_types = allowed_types
+        # 目前正在編輯的步驟索引, None 表示新增模式
+        self._editing_index = None
 
         self.frame = ttk.LabelFrame(master, text="動作步驟 (依序由上往下執行)")
         self.frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -163,12 +165,14 @@ class StepsEditor:
 
         self.listbox = tk.Listbox(list_frame, height=10)
         self.listbox.pack(side="left", fill="both", expand=True)
+        self.listbox.bind("<Double-Button-1>", lambda e: self.edit_selected_step())
 
         btn_frame = ttk.Frame(list_frame)
         btn_frame.pack(side="left", fill="y", padx=5)
         ttk.Button(btn_frame, text="上移", command=self.move_up).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="下移", command=self.move_down).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="刪除", command=self.delete_step).pack(fill="x", pady=2)
+        ttk.Button(btn_frame, text="編輯", command=self.edit_selected_step).pack(fill="x", pady=2)
         ttk.Button(btn_frame, text="編輯子步驟", command=self.edit_children).pack(fill="x", pady=(10, 2))
 
         add_frame = ttk.LabelFrame(self.frame, text="新增動作步驟")
@@ -183,7 +187,11 @@ class StepsEditor:
         type_combo.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         type_combo.bind("<<ComboboxSelected>>", lambda e: self.rebuild_fields())
 
-        ttk.Button(add_frame, text="新增此步驟", command=self.add_step).grid(row=0, column=2, padx=10, pady=5)
+        self.add_btn = ttk.Button(add_frame, text="新增此步驟", command=self.add_step)
+        self.add_btn.grid(row=0, column=2, padx=10, pady=5)
+        self.cancel_btn = ttk.Button(add_frame, text="取消編輯", command=self.cancel_edit)
+        self.cancel_btn.grid(row=0, column=4, padx=5, pady=5)
+        self.cancel_btn.grid_remove()
 
         self.fields_frame = ttk.Frame(add_frame)
         self.fields_frame.grid(row=1, column=0, columnspan=4, sticky="w")
@@ -316,66 +324,130 @@ class StepsEditor:
     def add_step(self):
         t = self.get_selected_type()
         try:
-            if t in ("key_down", "key_up", "key_click"):
-                key = self.key_var.get().strip()
-                if not key:
-                    messagebox.showwarning("輸入錯誤", "請輸入按鍵名稱")
-                    return
-                step = {"type": t, "key": key}
-
-            elif t == "move_mouse":
-                step = {"type": t, "x": int(self.x_var.get()), "y": int(self.y_var.get())}
-
-            elif t in ("mouse_down", "mouse_up", "mouse_click"):
-                step = {"type": t, "button": self.mouse_var.get()}
-
-            elif t == "wait":
-                step = {"type": t, "seconds": float(self.wait_var.get())}
-
-            elif t == "find_window_move":
-                title = self.window_title_var.get().strip()
-                if not title:
-                    messagebox.showwarning("輸入錯誤", "請輸入視窗標題關鍵字")
-                    return
-                step = {"type": t, "title": title, "x": int(self.x_var.get()), "y": int(self.y_var.get())}
-
-            elif t == "if_color":
-                color = self.color_var.get().strip().lstrip("#").upper()
-                if len(color) != 6:
-                    messagebox.showwarning("輸入錯誤", "顏色請輸入 6 碼十六進位, 例如 554941")
-                    return
-                step = {
-                    "type": t,
-                    "x": int(self.x_var.get()),
-                    "y": int(self.y_var.get()),
-                    "color": color,
-                    "tolerance": int(self.tolerance_var.get()),
-                    "then": [],
-                }
-
-            elif t == "if_image":
-                image_path = self.image_path_var.get().strip()
-                if not image_path or not os.path.exists(image_path):
-                    messagebox.showwarning("輸入錯誤", "請先使用區塊快捷鍵擷取圖片, 或確認圖片檔案存在")
-                    return
-                step = {
-                    "type": t,
-                    "rx1": int(self.rx1_var.get()),
-                    "ry1": int(self.ry1_var.get()),
-                    "rx2": int(self.rx2_var.get()),
-                    "ry2": int(self.ry2_var.get()),
-                    "image_path": image_path,
-                    "confidence": float(self.confidence_var.get()),
-                    "then": [],
-                }
-            else:
-                return
+            new_step = self.build_step_from_type(t)
         except ValueError:
             messagebox.showwarning("輸入錯誤", "數值欄位請輸入正確的數字格式")
             return
+        if new_step is None:
+            return
 
-        self.steps.append(step)
+        if self._editing_index is not None:
+            old = self.steps[self._editing_index]
+            # 編輯判斷步驟時, 保留原本的子步驟內容
+            if "then" in old:
+                new_step["then"] = old["then"]
+            self.steps[self._editing_index] = new_step
+            self.cancel_edit()
+        else:
+            self.steps.append(new_step)
         self.refresh()
+
+    def build_step_from_type(self, t):
+        # 依動作類型與目前表單欄位內容組出一個步驟資料, 驗證失敗回傳 None
+        if t in ("key_down", "key_up", "key_click"):
+            key = self.key_var.get().strip()
+            if not key:
+                messagebox.showwarning("輸入錯誤", "請輸入按鍵名稱")
+                return None
+            return {"type": t, "key": key}
+
+        elif t == "move_mouse":
+            return {"type": t, "x": int(self.x_var.get()), "y": int(self.y_var.get())}
+
+        elif t in ("mouse_down", "mouse_up", "mouse_click"):
+            return {"type": t, "button": self.mouse_var.get()}
+
+        elif t == "wait":
+            return {"type": t, "seconds": float(self.wait_var.get())}
+
+        elif t == "find_window_move":
+            title = self.window_title_var.get().strip()
+            if not title:
+                messagebox.showwarning("輸入錯誤", "請輸入視窗標題關鍵字")
+                return None
+            return {"type": t, "title": title, "x": int(self.x_var.get()), "y": int(self.y_var.get())}
+
+        elif t == "if_color":
+            color = self.color_var.get().strip().lstrip("#").upper()
+            if len(color) != 6:
+                messagebox.showwarning("輸入錯誤", "顏色請輸入 6 碼十六進位, 例如 554941")
+                return None
+            return {
+                "type": t,
+                "x": int(self.x_var.get()),
+                "y": int(self.y_var.get()),
+                "color": color,
+                "tolerance": int(self.tolerance_var.get()),
+                "then": [],
+            }
+
+        elif t == "if_image":
+            image_path = self.image_path_var.get().strip()
+            if not image_path or not os.path.exists(image_path):
+                messagebox.showwarning("輸入錯誤", "請先使用區塊快捷鍵擷取圖片, 或確認圖片檔案存在")
+                return None
+            return {
+                "type": t,
+                "rx1": int(self.rx1_var.get()),
+                "ry1": int(self.ry1_var.get()),
+                "rx2": int(self.rx2_var.get()),
+                "ry2": int(self.ry2_var.get()),
+                "image_path": image_path,
+                "confidence": float(self.confidence_var.get()),
+                "then": [],
+            }
+        return None
+
+    def edit_selected_step(self):
+        # 雙擊步驟或在按鈕列按「編輯」時, 將選取步驟的內容載入表單供修改
+        idx = self.get_selected_index()
+        if idx is None:
+            messagebox.showinfo("提示", "請先選擇一個步驟")
+            return
+        step = self.steps[idx]
+        self.type_var.set(STEP_TYPE_DISPLAY[step["type"]])
+        self.rebuild_fields()
+        self.fill_fields_from_step(step)
+        self._editing_index = idx
+        self.add_btn.config(text="儲存變更", command=self.add_step)
+        self.cancel_btn.grid()
+
+    def fill_fields_from_step(self, step):
+        # 將既存步驟的資料填入目前表單欄位
+        t = step["type"]
+        if t in ("key_down", "key_up", "key_click"):
+            self.key_var.set(step["key"])
+        elif t == "move_mouse":
+            self.x_var.set(str(step["x"]))
+            self.y_var.set(str(step["y"]))
+        elif t in ("mouse_down", "mouse_up", "mouse_click"):
+            self.mouse_var.set(step["button"])
+        elif t == "wait":
+            self.wait_var.set(str(step["seconds"]))
+        elif t == "find_window_move":
+            self.window_title_var.set(step["title"])
+            self.x_var.set(str(step["x"]))
+            self.y_var.set(str(step["y"]))
+        elif t == "if_color":
+            self.x_var.set(str(step["x"]))
+            self.y_var.set(str(step["y"]))
+            self.color_var.set(step["color"])
+            self.tolerance_var.set(str(step["tolerance"]))
+        elif t == "if_image":
+            self.rx1_var.set(str(step["rx1"]))
+            self.ry1_var.set(str(step["ry1"]))
+            self.rx2_var.set(str(step["rx2"]))
+            self.ry2_var.set(str(step["ry2"]))
+            self.image_path_var.set(step["image_path"])
+            self.confidence_var.set(str(step["confidence"]))
+
+    def cancel_edit(self):
+        # 取消編輯模式, 表單恢復成新增狀態
+        self._editing_index = None
+        self.add_btn.config(text="新增此步驟", command=self.add_step)
+        self.cancel_btn.grid_remove()
+        self.type_var.set(STEP_TYPE_DISPLAY[self.allowed_types[0]])
+        self.rebuild_fields()
 
     def move_up(self):
         idx = self.get_selected_index()
