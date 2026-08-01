@@ -112,30 +112,28 @@
           ]
         },
         {
-          "type": "if_image",
-          "rx1": 9,
-          "ry1": 434,
-          "rx2": 474,
-          "ry2": 476,
-          "image_path": "D:\\claudeFile\\macro_tool\\dist\\MacroTool\\_internal\\pics\\01.jpg",
-          "confidence": 0.9,
-          "then": []
+          "type": "if_color",
+          "x": 217,
+          "y": 452,
+          "color": "212932",
+          "tolerance": 20,
+          "then": [
+            {
+              "type": "wait",
+              "seconds": 1.0
+            },
+            {
+              "type": "key_down",
+              "key": "f5"
+            },
+            {
+              "type": "wait",
+              "seconds": 1.0
+            }
+          ]
         }
       ],
       "enabled": true
-    },
-    "F5": {
-      "enabled": false,
-      "steps": [
-        {
-          "type": "key_click",
-          "key": "f5"
-        },
-        {
-          "type": "wait",
-          "seconds": 10.0
-        }
-      ]
     }
   }
 }

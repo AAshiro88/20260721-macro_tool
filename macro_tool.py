@@ -551,7 +551,8 @@ class MacroApp:
     def __init__(self, root):
         self.root = root
         self.root.title("巨集自動化工具")
-        self.root.geometry("900x680")
+        self.root.geometry("1100x800")
+        self.root.minsize(1000, 700)
 
         # 資料結構: profiles = { 名稱: {"enabled": 布林值, "steps": [step, ...]} }
         # enabled 表示此巨集是否受統一快捷鍵控制, 未勾選則只能用手動按鈕開始/停止
@@ -594,6 +595,10 @@ class MacroApp:
         self._held_mouse_buttons = set()
 
         self.mouse = MouseController()
+
+        # 滑鼠位置與顏色即時監看狀態
+        self.mouse_monitor_on = False
+        self._mouse_monitor_after = None
 
         self.load_data()
         self.build_ui()
@@ -703,6 +708,23 @@ class MacroApp:
         ttk.Button(manual_frame, text="手動開始/停止", command=self.manual_toggle).grid(row=0, column=0, padx=5, pady=5)
         self.status_label = ttk.Label(manual_frame, text="狀態: 尚未選擇巨集", foreground="gray")
         self.status_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+        # 滑鼠位置與顏色即時監看區域
+        monitor_frame = ttk.LabelFrame(right_frame, text="滑鼠位置與顏色即時監看 (需要時打勾啟用, 會持續更新)")
+        monitor_frame.pack(fill="x", pady=(0, 5))
+
+        self.mouse_monitor_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(monitor_frame, text="啟用即時顯示", variable=self.mouse_monitor_var,
+                        command=self.toggle_mouse_monitor).grid(row=0, column=0, padx=5, pady=5)
+        self.mouse_monitor_label = ttk.Label(monitor_frame, text="監看已停用", foreground="gray")
+        self.mouse_monitor_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        # 色塊: 以背景色即時顯示該點顏色
+        self.mouse_monitor_color_label = tk.Label(monitor_frame, width=8, height=2,
+                                                  relief="sunken", bd=2, background="lightgray")
+        self.mouse_monitor_color_label.grid(row=0, column=2, padx=5, pady=5)
+        ttk.Label(monitor_frame, text="注意: 螢幕縮放建議設為 100%, 否則顯示座標與實際位置會有落差").grid(
+            row=0, column=3, padx=5, pady=5, sticky="w"
+        )
 
         # 記錄用快捷鍵設定區域
         record_frame = ttk.LabelFrame(right_frame, text="記錄快捷鍵設定 (滑鼠移到目標處後按下, 自動填入目前作用中的表單)")
@@ -928,6 +950,42 @@ class MacroApp:
                 pass
         self.record_hotkey_handles = {}
 
+    # ---------------------- 滑鼠位置與顏色即時監看 ----------------------
+
+    def toggle_mouse_monitor(self):
+        # 依打勾狀態啟用或停用滑鼠位置與顏色的即時監看
+        self.mouse_monitor_on = self.mouse_monitor_var.get()
+        if self.mouse_monitor_on:
+            if self._mouse_monitor_after is None:
+                self.update_mouse_monitor()
+        else:
+            if self._mouse_monitor_after is not None:
+                self.root.after_cancel(self._mouse_monitor_after)
+                self._mouse_monitor_after = None
+            self.mouse_monitor_label.config(text="監看已停用", foreground="gray")
+            self.mouse_monitor_color_label.config(background="lightgray")
+
+    def update_mouse_monitor(self):
+        # 定期讀取目前滑鼠位置與該處顏色, 顯示在監看區域
+        if not self.mouse_monitor_on:
+            self._mouse_monitor_after = None
+            return
+        try:
+            x, y = self.mouse.position
+            x, y = int(x), int(y)
+            img = ImageGrab.grab(bbox=(x, y, x + 1, y + 1))
+            r, g, b = img.getpixel((0, 0))[:3]
+            hex_color = "{:02X}{:02X}{:02X}".format(r, g, b)
+            self.mouse_monitor_label.config(
+                text="X: {}  Y: {}  顏色: #{}  (RGB: {}, {}, {})".format(x, y, hex_color, r, g, b),
+                foreground="black",
+            )
+            self.mouse_monitor_color_label.config(background="#{}".format(hex_color))
+        except Exception:
+            self.mouse_monitor_label.config(text="無法取得滑鼠位置或顏色", foreground="red")
+            self.mouse_monitor_color_label.config(background="lightgray")
+        self._mouse_monitor_after = self.root.after(80, self.update_mouse_monitor)
+
     # ---------------------- 按鍵錄製功能 ----------------------
 
     _MODIFIER_KEYS = {'ctrl', 'ctrl_l', 'ctrl_r', 'alt', 'alt_l', 'alt_r',
@@ -1152,6 +1210,9 @@ class MacroApp:
         if self._hook_id is not None:
             keyboard.unhook(self._hook_id)
             self._hook_id = None
+        if self._mouse_monitor_after is not None:
+            self.root.after_cancel(self._mouse_monitor_after)
+            self._mouse_monitor_after = None
         for name in list(self.profiles.keys()):
             self.stop_macro(name)
         self.unregister_global_hotkey()
