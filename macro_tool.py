@@ -435,6 +435,7 @@ class StepsEditor:
         for idx, step in enumerate(self.steps, start=1):
             self.listbox.insert(tk.END, "{}. {}".format(idx, self.format_step(step)))
         if selected is not None and selected < len(self.steps):
+            self.listbox.selection_clear(0, tk.END)
             self.listbox.selection_set(selected)
             self.listbox.see(selected)
         # 子步驟編輯器變動時, 同步更新上層畫面的顯示
@@ -678,6 +679,7 @@ class StepsEditor:
             return
         self.steps[idx - 1], self.steps[idx] = self.steps[idx], self.steps[idx - 1]
         self.refresh()
+        self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(idx - 1)
         self.listbox.see(idx - 1)
 
@@ -687,6 +689,7 @@ class StepsEditor:
             return
         self.steps[idx + 1], self.steps[idx] = self.steps[idx], self.steps[idx + 1]
         self.refresh()
+        self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(idx + 1)
         self.listbox.see(idx + 1)
 
@@ -698,6 +701,7 @@ class StepsEditor:
         step = self.steps.pop(idx)
         self.steps.insert(0, step)
         self.refresh()
+        self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(0)
         self.listbox.see(0)
 
@@ -709,6 +713,7 @@ class StepsEditor:
         step = self.steps.pop(idx)
         self.steps.append(step)
         self.refresh()
+        self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(len(self.steps) - 1)
         self.listbox.see(len(self.steps) - 1)
 
@@ -721,6 +726,7 @@ class StepsEditor:
         # 刪除後自動選擇下一個動作, 若刪除的是最後一項則選擇新的最後一項
         if self.steps:
             next_idx = min(idx, len(self.steps) - 1)
+            self.listbox.selection_clear(0, tk.END)
             self.listbox.selection_set(next_idx)
             self.listbox.see(next_idx)
 
