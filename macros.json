@@ -5,96 +5,121 @@
       "hotkey": "f6",
       "steps": [
         {
-          "type": "key_down",
-          "key": "right"
+          "type": "find_window_move",
+          "title": "GetAmped",
+          "x": 0,
+          "y": 0
         },
         {
-          "type": "wait",
-          "seconds": 0.1
+          "type": "if_color",
+          "x": 688,
+          "y": 77,
+          "color": "A9A9A9",
+          "tolerance": 20,
+          "then": [
+            {
+              "type": "key_down",
+              "key": "right"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.1
+            },
+            {
+              "type": "key_down",
+              "key": "down"
+            },
+            {
+              "type": "wait",
+              "seconds": 1.0
+            },
+            {
+              "type": "key_down",
+              "key": "v"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.1
+            },
+            {
+              "type": "key_up",
+              "key": "v"
+            },
+            {
+              "type": "wait",
+              "seconds": 1.0
+            },
+            {
+              "type": "key_up",
+              "key": "right"
+            },
+            {
+              "type": "wait",
+              "seconds": 2.0
+            },
+            {
+              "type": "key_up",
+              "key": "down"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.5
+            },
+            {
+              "type": "key_down",
+              "key": "z"
+            },
+            {
+              "type": "wait",
+              "seconds": 1.0
+            },
+            {
+              "type": "key_down",
+              "key": "left"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.1
+            },
+            {
+              "type": "key_up",
+              "key": "left"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.1
+            },
+            {
+              "type": "key_down",
+              "key": "x"
+            },
+            {
+              "type": "wait",
+              "seconds": 1.0
+            },
+            {
+              "type": "key_up",
+              "key": "x"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.1
+            },
+            {
+              "type": "key_up",
+              "key": "z"
+            }
+          ]
         },
         {
-          "type": "key_down",
-          "key": "down"
-        },
-        {
-          "type": "wait",
-          "seconds": 2.0
-        },
-        {
-          "type": "key_down",
-          "key": "v"
-        },
-        {
-          "type": "wait",
-          "seconds": 0.1
-        },
-        {
-          "type": "key_up",
-          "key": "v"
-        },
-        {
-          "type": "wait",
-          "seconds": 2.0
-        },
-        {
-          "type": "key_up",
-          "key": "right"
-        },
-        {
-          "type": "wait",
-          "seconds": 2.0
-        },
-        {
-          "type": "key_up",
-          "key": "down"
-        },
-        {
-          "type": "wait",
-          "seconds": 0.1
-        },
-        {
-          "type": "key_down",
-          "key": "z"
-        },
-        {
-          "type": "wait",
-          "seconds": 0.1
-        },
-        {
-          "type": "key_down",
-          "key": "left"
-        },
-        {
-          "type": "wait",
-          "seconds": 1.0
-        },
-        {
-          "type": "key_up",
-          "key": "left"
-        },
-        {
-          "type": "wait",
-          "seconds": 0.1
-        },
-        {
-          "type": "key_down",
-          "key": "x"
-        },
-        {
-          "type": "wait",
-          "seconds": 1.0
-        },
-        {
-          "type": "key_up",
-          "key": "x"
-        },
-        {
-          "type": "wait",
-          "seconds": 0.1
-        },
-        {
-          "type": "key_up",
-          "key": "z"
+          "type": "if_image",
+          "rx1": 9,
+          "ry1": 434,
+          "rx2": 474,
+          "ry2": 476,
+          "image_path": "D:\\claudeFile\\macro_tool\\dist\\MacroTool\\_internal\\pics\\01.jpg",
+          "confidence": 0.9,
+          "then": []
         }
       ],
       "enabled": true

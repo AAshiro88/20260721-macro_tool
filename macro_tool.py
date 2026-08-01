@@ -141,10 +141,12 @@ def check_image(region, image_path, confidence):
 # allowed_types 傳入不同的可選動作類型清單, 以及 steps 傳入不同的清單參照
 
 class StepsEditor:
-    def __init__(self, master, app, steps, allowed_types):
+    def __init__(self, master, app, steps, allowed_types, parent_editor=None):
         self.app = app
         self.steps = steps
         self.allowed_types = allowed_types
+        # 上一層的步驟編輯器 (編輯子步驟時傳入), 內容變動時同步更新上層畫面
+        self.parent_editor = parent_editor
         # 目前正在編輯的步驟索引, None 表示新增模式
         self._editing_index = None
 
@@ -316,6 +318,9 @@ class StepsEditor:
         self.listbox.delete(0, tk.END)
         for idx, step in enumerate(self.steps, start=1):
             self.listbox.insert(tk.END, "{}. {}".format(idx, self.format_step(step)))
+        # 子步驟編輯器變動時, 同步更新上層畫面的顯示
+        if self.parent_editor is not None:
+            self.parent_editor.refresh()
 
     def get_selected_index(self):
         sel = self.listbox.curselection()
@@ -493,6 +498,10 @@ class StepsEditor:
             return
         del self.steps[idx]
         self.refresh()
+        # 刪除後自動選擇下一個動作, 若刪除的是最後一項則選擇新的最後一項
+        if self.steps:
+            next_idx = min(idx, len(self.steps) - 1)
+            self.listbox.selection_set(next_idx)
 
     def edit_children(self):
         idx = self.get_selected_index()
@@ -508,7 +517,7 @@ class StepsEditor:
         win = tk.Toplevel(self.app.root)
         win.title("編輯子步驟 - 條件成立時依序執行")
         win.geometry("680x480")
-        StepsEditor(win, self.app, step["then"], CHILD_TYPES)
+        StepsEditor(win, self.app, step["then"], CHILD_TYPES, parent_editor=self)
 
     # ---------------------- 供全域快捷鍵記錄呼叫 ----------------------
 
