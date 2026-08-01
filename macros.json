@@ -64,7 +64,7 @@
       },
       {
         "type": "wait",
-        "seconds": 2.0
+        "seconds": 1.0
       },
       {
         "type": "key_up",
