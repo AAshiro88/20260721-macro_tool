@@ -971,6 +971,11 @@ class MacroApp:
         # 程式啟動時, 依照已儲存的設定重新註冊統一快捷鍵
         self.register_global_hotkey()
 
+        # 若上次關閉時是小視窗模式, 啟動後直接以小視窗顯示
+        if self.window_state == "mini":
+            self.root.withdraw()
+            self.build_mini_window()
+
     # ---------------------- 資料存取 ----------------------
 
     def load_data(self):
@@ -993,6 +998,9 @@ class MacroApp:
             self.global_hotkey = ""
             self.profiles = data if isinstance(data, dict) else {}
 
+        # 上次關閉時的視窗狀態: "normal" 大視窗, "mini" 小視窗
+        self.window_state = data.get("window_state", "normal") if isinstance(data, dict) else "normal"
+
         for name, profile in self.profiles.items():
             # 確保每組巨集都有 enabled 欄位 (是否受統一快捷鍵控制), 預設為勾選
             profile.setdefault("enabled", True)
@@ -1000,10 +1008,26 @@ class MacroApp:
             self.running_flags[name] = False
 
     def save_data(self):
-        data = {"global_hotkey": self.global_hotkey, "profiles": self.profiles}
+        data = {"global_hotkey": self.global_hotkey, "window_state": self.window_state, "profiles": self.profiles}
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         messagebox.showinfo("儲存完成", "巨集設定已儲存")
+
+    def save_window_state(self):
+        # 靜默更新視窗狀態欄位, 不覆寫巨集內容, 避免關閉時意外存到未完成的編輯
+        try:
+            if os.path.exists(DATA_FILE):
+                with open(DATA_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {}
+            else:
+                data = {}
+            data["window_state"] = "mini" if self.mini_window is not None else "normal"
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     # ---------------------- 介面建立 ----------------------
 
@@ -1416,7 +1440,7 @@ class MacroApp:
         self.mini_toggle_btn.pack(fill="x", padx=5, pady=2)
         ttk.Button(self.mini_window, text="還原主視窗",
                    command=self.restore_from_mini).pack(fill="x", padx=5, pady=(2, 5))
-        self.mini_window.protocol("WM_DELETE_WINDOW", self.restore_from_mini)
+        self.mini_window.protocol("WM_DELETE_WINDOW", self.on_close)
         self._mini_refresh_after = self.root.after(300, self.refresh_mini_window)
 
     def refresh_mini_window(self):
@@ -1750,6 +1774,8 @@ class MacroApp:
     # ---------------------- 關閉程式 ----------------------
 
     def on_close(self):
+        # 記錄最後的視窗狀態 (小視窗或大視窗), 下次開啟時沿用
+        self.save_window_state()
         if self._hook_id is not None:
             keyboard.unhook(self._hook_id)
             self._hook_id = None
