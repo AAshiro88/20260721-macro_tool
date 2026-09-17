@@ -28,10 +28,14 @@ pip install keyboard pynput pywin32 pillow opencv-python numpy
 
 ## 執行方式
 
-在專案目錄下執行：
+雙擊專案目錄下的 `啟動巨集工具.vbs` 即可啟動。
+
+該腳本使用 Anaconda `base` 環境（`C:\ProgramData\Anaconda3`）下的 `pythonw.exe` 執行 `macro_tool.py`，不顯示命令提示字元視窗。若改用其他 Python 環境，請自行調整 `.vbs` 中的 Python 路徑。
+
+若希望從命令提示字元執行，也可改用：
 
 ```
-python macro_tool.py
+"C:\ProgramData\Anaconda3\python.exe" macro_tool.py
 ```
 
 ## 使用說明
